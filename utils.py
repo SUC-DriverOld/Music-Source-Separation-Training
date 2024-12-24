@@ -651,6 +651,97 @@ def bleed_full(
     return bleedless.cpu().numpy(), fullness.cpu().numpy()
 
 
+def f0_uv_fitness(reference, estimate, f0_max=2200, f0_min=40, hop_length=1024, sampling_rate=44100):
+    """
+    Calculate the F0 and voiced/unvoiced (UV) fitness between a reference and an estimated audio signal.
+    **These two metrics are only of reference value for vocals.**
+
+    The F0 fitness measures how similar the fundamental frequency (F0) of the reference and estimated signals are,
+    while the UV fitness evaluates the accuracy of voiced/unvoiced detection between the two signals. Both are computed
+    by extracting F0 and UV information using pitch analysis and then calculating the Pearson correlation between the 
+    corresponding F0 and UV sequences. The F0 fitness can also be used to compare the completeness of the extracted 
+    fundamental frequency (F0) for human voice signals. The values of these two metrics are both -1 to 1, and the closer 
+    the value is to 1, the better the fit.
+
+    Parameters:
+    ----------
+    reference : np.ndarray
+        The reference audio signal, shape (samples,), where samples is the length of the audio in samples.
+
+    estimate : np.ndarray
+        The estimated audio signal, shape (samples,).
+
+    f0_max : int, optional
+        The maximum allowable F0 frequency. Default is 2200 Hz.
+
+    f0_min : int, optional
+        The minimum allowable F0 frequency. Default is 40 Hz.
+
+    hop_length : int, optional
+        The hop length used for pitch analysis. Default is 1024.
+
+    sampling_rate : int, optional
+        The sample rate of the audio signals. Default is 44100 Hz.
+
+    Returns:
+    -------
+    tuple
+        A tuple containing two values:
+        - `f0_fitness` (float): A score indicating how similar the fundamental frequencies of the reference and estimated signals are (higher is better).
+        - `uv_fitness` (float): A score indicating how well the voiced/unvoiced classification matches between the reference and estimated signals (higher is better).
+    """
+
+    import parselmouth
+
+    def interpolate_f0(f0):
+        vuv_vector = np.zeros_like(f0, dtype=np.float32)
+        vuv_vector[f0 > 0.0] = 1.0
+        vuv_vector[f0 <= 0.0] = 0.0
+
+        nzindex = np.nonzero(f0)[0]
+        data = f0[nzindex]
+        nzindex = nzindex.astype(np.float32)
+        time_org = hop_length / sampling_rate * nzindex
+        time_frame = np.arange(f0.shape[0]) * hop_length / sampling_rate
+
+        if data.shape[0] <= 0:
+            return np.zeros(f0.shape[0], dtype=np.float32), vuv_vector
+        if data.shape[0] == 1:
+            return np.ones(f0.shape[0], dtype=np.float32) * f0[0], vuv_vector
+
+        f0 = np.interp(time_frame, time_org, data, left=data[0], right=data[-1])
+        return f0, vuv_vector
+
+    def compute_f0(wav, p_len=None):
+        x = wav
+        if p_len is None:
+            p_len = x.shape[0] // hop_length
+        else:
+            assert abs(p_len - x.shape[0] // hop_length) < 4, "pad length error"
+        time_step = hop_length / sampling_rate * 1000
+        f0 = parselmouth.Sound(x, sampling_rate).to_pitch_ac(
+            time_step=time_step / 1000, voicing_threshold=0.6,
+            pitch_floor=f0_min, pitch_ceiling=f0_max).selected_array['frequency']
+
+        pad_size = (p_len - len(f0) + 1) // 2
+        if pad_size > 0 or p_len - len(f0) - pad_size > 0:
+            f0 = np.pad(f0, [[pad_size, p_len - len(f0) - pad_size]], mode='constant')
+        f0, uv = interpolate_f0(f0)
+        return f0, uv
+
+    def calculate_pearson(reference, estimate):
+        assert reference.shape == estimate.shape, "Reference and estimate must have the same shape"
+        correlation = np.corrcoef(reference, estimate)[0, 1]
+        return correlation
+
+    reference_f0, reference_uv = compute_f0(reference.astype(np.float32))
+    estimate_f0, estimate_uv = compute_f0(estimate.astype(np.float32))
+    f0_fitness = calculate_pearson(reference_f0, estimate_f0)
+    uv_fitness = calculate_pearson(reference_uv, estimate_uv)
+
+    return f0_fitness.astype(float), uv_fitness.astype(float)
+
+
 def get_metrics(
         metrics: List[str],
         reference: np.ndarray,
@@ -719,6 +810,13 @@ def get_metrics(
             result['bleedless'] = bleedless
         if 'fullness' in metrics:
             result['fullness'] = fullness
+
+    if 'f0_fitness' in metrics or 'uv_fitness' in metrics:
+        f0_fitness, uv_fitness = f0_uv_fitness(reference, estimate)
+        if 'f0_fitness' in metrics:
+            result['f0_fitness'] = f0_fitness
+        if 'uv_fitness' in metrics:
+            result['uv_fitness'] = uv_fitness
 
     return result
 
