@@ -30,5 +30,7 @@ accelerate
 huggingface-hub>=0.23.0
 prodigyopt
 torch_log_wmse
+loralib
+pyaudio
 wxpython==4.2.2
-praat-parselmouth
+matplotlib

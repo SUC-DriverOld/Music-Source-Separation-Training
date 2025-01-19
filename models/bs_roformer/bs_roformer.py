@@ -471,8 +471,7 @@ class BSRoformer(Module):
             raw_audio = rearrange(raw_audio, 'b t -> b 1 t')
 
         channels = raw_audio.shape[1]
-        assert (not self.stereo and channels == 1) or (
-                    self.stereo and channels == 2), 'stereo needs to be set to True if passing in audio signal that is stereo (channel dimension of 2). also need to be False if mono (channel dimension of 1)'
+        assert (not self.stereo and channels == 1) or (self.stereo and channels == 2), 'stereo needs to be set to True if passing in audio signal that is stereo (channel dimension of 2). also need to be False if mono (channel dimension of 1)'
 
         # to stft
 
@@ -485,13 +484,15 @@ class BSRoformer(Module):
         try:
             stft_repr = torch.stft(raw_audio, **self.stft_kwargs, window=stft_window, return_complex=True)
         except:
-            stft_repr = torch.stft(raw_audio.cpu() if x_is_mps else raw_audio, **self.stft_kwargs, window=stft_window.cpu() if x_is_mps else stft_window, return_complex=True).to(device)
-
+            stft_repr = torch.stft(raw_audio.cpu() if x_is_mps else raw_audio, **self.stft_kwargs,
+                                   window=stft_window.cpu() if x_is_mps else stft_window, return_complex=True).to(
+                device)
         stft_repr = torch.view_as_real(stft_repr)
 
         stft_repr = unpack_one(stft_repr, batch_audio_channel_packed_shape, '* f t c')
-        stft_repr = rearrange(stft_repr,
-                              'b s f t c -> b (f s) t c')  # merge stereo / mono into the frequency, with frequency leading dimension, for band splitting
+
+        # merge stereo / mono into the frequency, with frequency leading dimension, for band splitting
+        stft_repr = rearrange(stft_repr,'b s f t c -> b (f s) t c')
 
         x = rearrange(stft_repr, 'b f t c -> b t (f c)')
 
